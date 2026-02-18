@@ -1,0 +1,375 @@
+# Rails 7.0 Framework Defaults Config Reference
+#
+# Configs are organized into tiers:
+#   tier_1: Safe to flip — test-only or trivially low risk
+#   tier_2: Low risk — need a quick codebase grep to confirm
+#   tier_3: Medium/high risk — need careful analysis (future addition)
+#
+# Processing order: tier_1 first, then tier_2, then tier_3.
+
+version: "7.0"
+
+tier_1:
+  # ---- Test-only or trivially safe configs ----
+
+  - config: active_support.executor_around_test_case
+    config_line: "Rails.application.config.active_support.executor_around_test_case = true"
+    new_default: true
+    old_default: false
+    risk: very_low
+    old_behavior: "Tests do not wrap in Rails.application.executor"
+    new_behavior: >
+      Tests are wrapped in Rails.application.executor.wrap, enabling features
+      like Active Record query cache and async queries in tests. Makes tests
+      behave closer to actual requests.
+    lookup: []
+    decision: >
+      Always safe to use new default (true). This only affects the test
+      environment. If tests fail, the failures likely reveal real issues that
+      were hidden before. Just run the test suite and see.
+
+  - config: active_record.verify_foreign_keys_for_fixtures
+    config_line: "Rails.application.config.active_record.verify_foreign_keys_for_fixtures = true"
+    new_default: true
+    old_default: false
+    risk: very_low
+    old_behavior: "Fixtures with foreign key violations load silently"
+    new_behavior: "Rails raises an error when fixtures violate foreign key constraints"
+    lookup: []
+    decision: >
+      Always safe to use new default (true). This only affects the test
+      environment. If it surfaces errors, those are real data integrity issues
+      in your fixtures that should be fixed. Just run the test suite and fix
+      any fixture FK violations.
+
+  - config: action_mailer.smtp_timeout
+    config_line: "Rails.application.config.action_mailer.smtp_timeout = 5"
+    new_default: 5
+    old_default: "nil (no explicit timeout)"
+    risk: very_low
+    old_behavior: "No explicit timeout for SMTP connections (Ruby net/smtp default)"
+    new_behavior: "Sets both open_timeout and read_timeout to 5 seconds for SMTP"
+    lookup:
+      - search: "delivery_method.*:smtp"
+        in: "config/environments/*.rb"
+        reason: "Check if the app even uses SMTP delivery"
+      - search: "smtp_settings"
+        in: "config/environments/*.rb, config/initializers/**/*.rb"
+        reason: "Check for existing SMTP configuration and any custom timeouts"
+    decision: >
+      If app does not use SMTP delivery → no impact, safe to use new default.
+      If app uses SMTP with a known-fast server → safe to use new default (5s).
+      If app uses SMTP with a server known to be slow (e.g., some corporate
+      relays) → consider setting a higher timeout value like 10 or 15.
+      When unsure → use new default (5). 5 seconds is generous for most servers.
+
+tier_2:
+  # ---- Low risk configs needing a codebase check ----
+
+  - config: action_view.button_to_generates_button_tag
+    config_line: "Rails.application.config.action_view.button_to_generates_button_tag = true"
+    new_default: true
+    old_default: false
+    risk: low
+    old_behavior: "button_to renders <input type='submit'>"
+    new_behavior: "button_to renders <button> element"
+    lookup:
+      - search: "button_to"
+        in: "app/views/**/*.erb, app/views/**/*.haml, app/views/**/*.slim, app/helpers/**/*.rb"
+        reason: "Find all usages of the button_to helper"
+      - search: "input\\[type=.submit.\\]"
+        in: "app/assets/stylesheets/**/*"
+        reason: "Check if CSS targets input[type=submit] elements from button_to"
+      - search: "input\\[type=.submit.\\]"
+        in: "app/javascript/**/*, app/assets/javascripts/**/*"
+        reason: "Check if JS targets input[type=submit] elements from button_to"
+    decision: >
+      If no button_to usage found → safe to use new default (true), zero impact.
+      If button_to is used but no CSS/JS targets input[type=submit] → safe.
+      If CSS/JS targets input[type=submit] near button_to output → keep false,
+      flag for manual review to update selectors to target button elements.
+
+  - config: action_view.apply_stylesheet_media_default
+    config_line: "Rails.application.config.action_view.apply_stylesheet_media_default = false"
+    new_default: false
+    old_default: true
+    risk: low
+    old_behavior: "stylesheet_link_tag adds media='screen' by default"
+    new_behavior: "stylesheet_link_tag does not add a media attribute"
+    lookup:
+      - search: "stylesheet_link_tag"
+        in: "app/views/layouts/**/*"
+        reason: "Find all stylesheet_link_tag calls"
+      - search: "@media print"
+        in: "app/assets/stylesheets/**/*"
+        reason: "Check if the app has print-specific styles"
+      - search: "media:"
+        in: "app/views/layouts/**/*"
+        reason: "Check if stylesheet_link_tag already passes explicit media option"
+    decision: >
+      If no print styles exist → safe to use new default (false).
+      If print styles exist but stylesheet_link_tag already passes explicit
+      media: option → safe, the explicit option always wins.
+      If print styles rely on the implicit media='screen' to be excluded from
+      print rendering → keep true, flag for review.
+      Most apps → safe to use new default.
+
+  - config: active_support.remove_deprecated_time_with_zone_name
+    config_line: "Rails.application.config.active_support.remove_deprecated_time_with_zone_name = true"
+    new_default: true
+    old_default: false
+    risk: low
+    old_behavior: "ActiveSupport::TimeWithZone#name returns 'Time' (mimics Time class)"
+    new_behavior: "TimeWithZone#name uses Ruby's default implementation"
+    lookup:
+      - search: "\\.name"
+        in: "app/**/*.rb, lib/**/*.rb"
+        reason: >
+          Look for .name called on time-related objects. This is a very broad
+          search — focus on instances where .name is called on variables that
+          are likely TimeWithZone objects (e.g., created_at.name, updated_at.name).
+    decision: >
+      If no code calls .name on TimeWithZone objects → safe to use new default.
+      This pattern is very rare in application code. Almost always safe to use
+      true. If found, check if the code depends on the return value being 'Time'.
+
+  - config: action_dispatch.default_headers
+    config_line: |
+      Rails.application.config.action_dispatch.default_headers = {
+        "X-Frame-Options" => "SAMEORIGIN",
+        "X-XSS-Protection" => "0",
+        "X-Content-Type-Options" => "nosniff",
+        "X-Download-Options" => "noopen",
+        "X-Permitted-Cross-Domain-Policies" => "none",
+        "Referrer-Policy" => "strict-origin-when-cross-origin"
+      }
+    new_default: "X-XSS-Protection changes from '1; mode=block' to '0'"
+    old_default: |
+      { "X-Frame-Options" => "SAMEORIGIN", "X-XSS-Protection" => "1; mode=block",
+        "X-Content-Type-Options" => "nosniff", "X-Download-Options" => "noopen",
+        "X-Permitted-Cross-Domain-Policies" => "none",
+        "Referrer-Policy" => "strict-origin-when-cross-origin" }
+    risk: low
+    old_behavior: "X-XSS-Protection is set to '1; mode=block' (enables browser XSS auditor)"
+    new_behavior: >
+      X-XSS-Protection is set to '0' (disables the browser XSS auditor).
+      This is actually MORE secure — the legacy XSS auditor in browsers was
+      flawed and could be exploited for side-channel attacks.
+    lookup:
+      - search: "default_headers"
+        in: "config/**/*.rb, config/initializers/**/*.rb"
+        reason: "Check if the app already customizes default_headers"
+      - search: "X-XSS-Protection"
+        in: "config/**/*.rb, app/**/*.rb"
+        reason: "Check if the app explicitly sets this header anywhere"
+    decision: >
+      If no custom default_headers config exists → safe to use new default.
+      If custom default_headers exist → merge carefully, keeping any custom
+      headers the app has added while updating X-XSS-Protection to '0'.
+      This change improves security. Safe in virtually all cases.
+
+  - config: active_storage.video_preview_arguments
+    config_line: |
+      Rails.application.config.active_storage.video_preview_arguments =
+        "-vf 'select=eq(n\\,0)+eq(key\\,1)+gt(scene\\,0.015),loop=loop=-1:size=2,trim=start_frame=1' -frames:v 1 -f image2"
+    new_default: "scene-change-based preview"
+    old_default: "'-y -vframes 1 -f image2' (first frame)"
+    risk: low
+    old_behavior: "Video previews use the first frame"
+    new_behavior: "Video previews use scene change detection for better thumbnails"
+    lookup:
+      - search: "has_one_attached\\|has_many_attached"
+        in: "app/models/**/*.rb"
+        reason: "Check if ActiveStorage is used at all"
+      - search: "video\\|mp4\\|webm\\|mov"
+        in: "app/models/**/*.rb, app/uploaders/**/*.rb"
+        reason: "Check if video content is handled"
+      - search: "video_preview_arguments"
+        in: "config/**/*.rb"
+        reason: "Check if already customized"
+    decision: >
+      If ActiveStorage is not used → no impact, safe to use new default.
+      If ActiveStorage is used but no video uploads → no impact, safe.
+      If videos are uploaded → safe to use new default, it produces better
+      thumbnails. Only concern is if ffmpeg is not available in production,
+      but that would already be an issue.
+      If already customized → keep the custom value.
+
+  - config: active_support.use_rfc4122_namespaced_uuids
+    config_line: "Rails.application.config.active_support.use_rfc4122_namespaced_uuids = true"
+    new_default: true
+    old_default: false
+    risk: low
+    old_behavior: "Digest::UUID.uuid_v3/uuid_v5 uses non-standard namespace ID handling"
+    new_behavior: "UUID generation follows RFC 4122 standard for namespace IDs"
+    lookup:
+      - search: "Digest::UUID\\|uuid_v3\\|uuid_v5"
+        in: "app/**/*.rb, lib/**/*.rb"
+        reason: "Check if the app uses namespaced UUID generation"
+    decision: >
+      If no usage of Digest::UUID.uuid_v3 or uuid_v5 found → safe to use
+      new default (true), zero impact.
+      If found → this will generate DIFFERENT UUIDs for the same input.
+      If those UUIDs are stored or used as identifiers → keep false to
+      avoid breaking existing references. Flag for manual review.
+
+# ---- Tier 3: Higher risk configs (documented but NOT auto-processed) ----
+# These are included for reference. The skill should flag these to the user
+# but NOT attempt to auto-recommend values without human review.
+
+tier_3_reference:
+  - config: active_support.key_generator_hash_digest_class
+    config_line: "Rails.application.config.active_support.key_generator_hash_digest_class = OpenSSL::Digest::SHA256"
+    new_default: "OpenSSL::Digest::SHA256"
+    old_default: "OpenSSL::Digest::SHA1"
+    risk: high
+    note: >
+      Changes the digest class for key generators from SHA1 (6.1 default) to
+      SHA256 (7.0 default). This affects encryption of cookies and all
+      encrypted messages.
+
+      CRITICAL DUAL-BOOT RULE: Do NOT change this config while the application
+      is dual-booted between Rails 6.1 and 7.0. The digest class must remain
+      SHA1 for both versions so cookies work under either Rails version without
+      any encryption change.
+
+      PROCESS:
+      1. During dual-boot: Keep load_defaults at 6.1. Do NOT touch this config.
+         SHA1 is used for both Rails versions. Cookies work seamlessly.
+      2. After the upgrade is complete and Rails 6.1 is fully removed from the
+         codebase: Update load_defaults to 7.0 (which switches to SHA256) AND
+         add the cookie rotator initializer from templates/cookie_rotator.rb.
+         The rotator lets Rails read old SHA1-encrypted cookies and re-write
+         them with SHA256 encryption transparently.
+      3. After a grace period (discuss with the client — typically weeks to
+         months depending on user session patterns), most/all cookies will
+         have been rotated to SHA256. The rotator can then be removed, but
+         it's also safe to leave it in the codebase indefinitely, including
+         through future upgrades.
+
+      LOOKUP:
+      - Check if the app is currently dual-booted (look for next_rails gem,
+        Gemfile dual-boot setup, or environment flags like RAILS_NEXT)
+      - If dual-booted → do NOT proceed. Flag this config to revisit after
+        the upgrade is complete.
+      - If not dual-booted (upgrade already finished) → proceed with adding
+        the cookie rotator and flipping to SHA256.
+
+      TEMPLATE: Copy templates/cookie_rotator.rb into the app's
+      config/initializers/ when enabling this config.
+
+  - config: active_support.hash_digest_class
+    config_line: "Rails.application.config.active_support.hash_digest_class = OpenSSL::Digest::SHA256"
+    new_default: "OpenSSL::Digest::SHA256"
+    old_default: "OpenSSL::Digest::MD5"
+    risk: high
+    note: >
+      Changes the digest for cache keys, ETags, etc. Will invalidate caches.
+      Typically safe to flip if you can tolerate a cache miss storm. Plan for
+      this during a low-traffic period.
+
+  - config: active_record.partial_inserts
+    config_line: "Rails.application.config.active_record.partial_inserts = false"
+    new_default: false
+    old_default: true
+    risk: medium
+    note: >
+      When false, all columns are included in INSERT queries regardless of
+      whether they have a default. Generally safe but may surface issues with
+      columns that have database-level defaults your app relies on not sending.
+      Grep for columns with DB defaults and verify behavior.
+
+  - config: active_record.automatic_scope_inversing
+    config_line: "Rails.application.config.active_record.automatic_scope_inversing = true"
+    new_default: true
+    old_default: false
+    risk: medium
+    note: >
+      Automatically infers inverse_of on scoped associations. Changes in-memory
+      object identity behavior. Check for code that relies on traversing scoped
+      associations returning fresh DB records rather than cached in-memory instances.
+
+  - config: action_controller.raise_on_open_redirects
+    config_line: "Rails.application.config.action_controller.raise_on_open_redirects = true"
+    new_default: true
+    old_default: false
+    risk: medium
+    note: >
+      Raises on redirect_back_or_to and redirect_to if URL is not recognized
+      as safe. Could break redirects to external URLs. Grep for redirect_to
+      and redirect_back_or_to with dynamic/external URLs.
+
+  - config: active_storage.variant_processor
+    config_line: "Rails.application.config.active_storage.variant_processor = :vips"
+    new_default: ":vips"
+    old_default: ":mini_magick"
+    risk: high
+    note: >
+      Switches image processing from MiniMagick (ImageMagick) to ruby-vips.
+      Requires libvips installed. All variant code needs updating to use
+      vips-compatible operations. Keep :mini_magick if not ready to migrate.
+
+  - config: action_controller.wrap_parameters_by_default
+    config_line: "Rails.application.config.action_controller.wrap_parameters_by_default = true"
+    new_default: true
+    old_default: false
+    risk: medium
+    note: >
+      Enables parameter wrapping for JSON by default. Check if the app already
+      configures this in config/initializers/wrap_parameters.rb. If that
+      initializer exists with custom config, keep using it.
+
+  - config: action_dispatch.cookies_serializer
+    config_line: "Rails.application.config.action_dispatch.cookies_serializer = :json"
+    new_default: ":json"
+    old_default: ":marshal"
+    risk: high
+    note: >
+      Changes cookie serialization from Marshal to JSON. Requires staged
+      migration: first set to :hybrid (which reads Marshal, writes JSON),
+      wait until all cookies have been rewritten, then switch to :json.
+      If unsure about cookie age, use :hybrid and keep it long-term.
+
+  - config: action_dispatch.return_only_request_media_type_on_content_type
+    config_line: "Rails.application.config.action_dispatch.return_only_request_media_type_on_content_type = false"
+    new_default: false
+    old_default: true
+    risk: medium
+    note: >
+      Changes ActionDispatch::Request#content_type to return just the media
+      type (e.g., "text/html") without charset. Check for code that parses
+      request.content_type and expects charset info.
+
+  - config: active_storage.multiple_file_field_include_hidden
+    config_line: "Rails.application.config.active_storage.multiple_file_field_include_hidden = true"
+    new_default: true
+    old_default: false
+    risk: medium
+    note: >
+      Makes has_many_attached replace the collection instead of appending.
+      Also adds a hidden field to file inputs. Check forms with multi-file
+      uploads and verify the replace vs append behavior is desired.
+
+  # These MUST go in config/application.rb, not the initializer file
+  application_rb_only:
+    - config: active_support.cache_format_version
+      config_line: "config.active_support.cache_format_version = 7.0"
+      new_default: 7.0
+      old_default: 6.1
+      risk: high
+      note: >
+        Changes the cache entry format. New entries won't be readable by
+        Rails 6.1. Only set this after fully deploying to Rails 7.0 with
+        no rollback plans. Must be set in config/application.rb.
+
+    - config: active_support.disable_to_s_conversion
+      config_line: "config.active_support.disable_to_s_conversion = true"
+      new_default: true
+      old_default: false
+      risk: medium
+      note: >
+        Disables deprecated #to_s override in some Ruby core classes.
+        Can cause subtle breakage in views and string interpolation.
+        Must be set in config/application.rb. Grep for .to_s calls on
+        Date, Time, DateTime objects and check if the app relies on the
+        Rails-formatted output.

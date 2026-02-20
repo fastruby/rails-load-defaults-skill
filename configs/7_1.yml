@@ -1,0 +1,490 @@
+# Rails 7.1 Framework Defaults Config Reference
+#
+# Configs are organized into tiers:
+#   tier_1: Safe to flip — test-only, deprecation removal, or trivially low risk
+#   tier_2: Low risk — need a quick codebase grep to confirm
+#   tier_3: Medium/high risk — need careful analysis, flagged for human review
+#
+# Processing order: tier_1 first, then tier_2, then tier_3.
+
+version: "7.1"
+
+tier_1:
+  # ---- Safe / test-only / trivially low risk ----
+
+  - config: action_dispatch.debug_exception_log_level
+    config_line: "Rails.application.config.action_dispatch.debug_exception_log_level = :error"
+    new_default: ":error"
+    old_default: ":fatal"
+    risk: very_low
+    old_behavior: "Uncaught exceptions during requests logged at :fatal level"
+    new_behavior: "Uncaught exceptions logged at :error level (more visible in logs)"
+    lookup: []
+    decision: >
+      Always safe to use new default. This just makes uncaught exceptions
+      more visible in your logs, which is generally desirable. No behavior
+      change in the application itself.
+
+  - config: dom_testing_default_html_version
+    config_line: "Rails.application.config.dom_testing_default_html_version = :html5"
+    new_default: ":html5"
+    old_default: ":html4"
+    risk: very_low
+    old_behavior: "Test helpers use HTML4 parser (Nokogiri)"
+    new_behavior: "Test helpers use HTML5 parser (Nokogiri::HTML5)"
+    lookup:
+      - search: "assert_select\\|css_select\\|assert_dom"
+        in: "test/**/*.rb, spec/**/*.rb"
+        reason: "Check if DOM-based test assertions are used"
+    decision: >
+      Safe to use new default (:html5). If tests fail, it's likely because
+      the HTML4 parser was more lenient with malformed HTML. Fix the HTML
+      rather than reverting. NOTE: JRuby does not support Nokogiri::HTML5,
+      so JRuby apps must keep :html4.
+
+  - config: active_support.raise_on_invalid_cache_expiration_time
+    config_line: "Rails.application.config.active_support.raise_on_invalid_cache_expiration_time = true"
+    new_default: true
+    old_default: false
+    risk: very_low
+    old_behavior: "Invalid expires_at/expires_in values are silently handled and logged"
+    new_behavior: "Raises ArgumentError on invalid cache expiration times"
+    lookup: []
+    decision: >
+      Safe to use new default (true). If this raises, it surfaces a genuine
+      bug where invalid expiration times were being passed. Fix the bug
+      rather than suppressing the error.
+
+  - config: precompile_filter_parameters
+    config_line: "Rails.application.config.precompile_filter_parameters = true"
+    new_default: true
+    old_default: false
+    risk: very_low
+    old_behavior: "config.filter_parameters compiled on each use"
+    new_behavior: "config.filter_parameters precompiled for better performance"
+    lookup: []
+    decision: >
+      Always safe to use new default (true). Pure performance optimization.
+      No behavior change — the same parameters are filtered, just faster.
+
+  - config: log_file_size
+    config_line: |
+      if Rails.env.local?
+        Rails.application.config.log_file_size = 100 * 1024 * 1024
+      end
+    new_default: "100 MB (dev/test only)"
+    old_default: "nil (unlimited)"
+    risk: very_low
+    old_behavior: "Log files grow without limit in development/test"
+    new_behavior: "Log files capped at 100 MB in development/test environments"
+    lookup: []
+    decision: >
+      Safe to use new default. Only affects local development and test
+      environments. Prevents runaway log files from filling disk.
+      Production is not affected.
+
+  - config: action_controller.allow_deprecated_parameters_hash_equality
+    config_line: "Rails.application.config.action_controller.allow_deprecated_parameters_hash_equality = false"
+    new_default: false
+    old_default: true
+    risk: low
+    old_behavior: "ActionController::Parameters == Hash returns true if contents match"
+    new_behavior: "ActionController::Parameters is never == to a Hash"
+    lookup:
+      - search: "params.*==\\|== params\\|params.*eql?"
+        in: "app/**/*.rb, lib/**/*.rb, test/**/*.rb, spec/**/*.rb"
+        reason: "Check if code compares params directly with a Hash"
+    decision: >
+      If no direct Hash comparison with params found → safe to use new default.
+      This comparison is deprecated and rarely done intentionally. If found,
+      update code to use params.to_unsafe_h or params.permit(...).to_h
+      for the comparison.
+
+  - config: active_record.allow_deprecated_singular_associations_name
+    config_line: "Rails.application.config.active_record.allow_deprecated_singular_associations_name = false"
+    new_default: false
+    old_default: true
+    risk: low
+    old_behavior: "Allows singular names for has_many/has_and_belongs_to_many associations"
+    new_behavior: "Raises error if singular name used for collection associations"
+    lookup:
+      - search: "has_many\\|has_and_belongs_to_many"
+        in: "app/models/**/*.rb"
+        reason: "Check association declarations for accidentally singular names"
+    decision: >
+      Safe to use new default. If it raises, it reveals a likely typo where
+      a singular name was used for a collection association. Fix the name.
+
+  - config: active_record.sqlite3_adapter_strict_strings_by_default
+    config_line: "Rails.application.config.active_record.sqlite3_adapter_strict_strings_by_default = true"
+    new_default: true
+    old_default: false
+    risk: very_low
+    old_behavior: "SQLite allows double-quoted string literals (can mask typos)"
+    new_behavior: "SQLite strict strings mode disables double-quoted string literals"
+    lookup:
+      - search: "sqlite"
+        in: "config/database.yml"
+        reason: "Check if the app uses SQLite at all"
+    decision: >
+      If app does not use SQLite → zero impact, safe to use new default.
+      If app uses SQLite → safe to use new default, but run tests to
+      catch any double-quoted string literals in raw SQL. These are bugs
+      that should be fixed anyway.
+
+  - config: active_record.belongs_to_required_validates_foreign_key
+    config_line: "Rails.application.config.active_record.belongs_to_required_validates_foreign_key = false"
+    new_default: false
+    old_default: true
+    risk: low
+    old_behavior: "belongs_to validation loads parent record to check presence (extra query)"
+    new_behavior: "belongs_to validation only checks the foreign key column for presence"
+    lookup:
+      - search: "belongs_to.*optional: false\\|belongs_to"
+        in: "app/models/**/*.rb"
+        reason: "Check for belongs_to associations (mandatory by default since Rails 5)"
+    decision: >
+      Safe to use new default (false). This is a performance improvement
+      that avoids an extra DB query on every validation. The only edge case
+      is if a foreign key column has a value that points to a non-existent
+      parent — but that's a data integrity issue, not a validation concern.
+
+tier_2:
+  # ---- Low risk but needs codebase check ----
+
+  - config: action_dispatch.default_headers
+    config_line: |
+      Rails.application.config.action_dispatch.default_headers = {
+        "X-Frame-Options" => "SAMEORIGIN",
+        "X-XSS-Protection" => "0",
+        "X-Content-Type-Options" => "nosniff",
+        "X-Permitted-Cross-Domain-Policies" => "none",
+        "Referrer-Policy" => "strict-origin-when-cross-origin"
+      }
+    new_default: "Removes X-Download-Options header"
+    old_default: "Includes 'X-Download-Options' => 'noopen'"
+    risk: low
+    old_behavior: "Default headers include X-Download-Options for Internet Explorer"
+    new_behavior: "X-Download-Options removed (only relevant to IE, which is EOL)"
+    lookup:
+      - search: "default_headers"
+        in: "config/**/*.rb, config/initializers/**/*.rb"
+        reason: "Check if the app already customizes default headers"
+      - search: "X-Download-Options"
+        in: "config/**/*.rb, app/**/*.rb"
+        reason: "Check if explicitly referenced anywhere"
+    decision: >
+      If no IE support required → safe to use new default.
+      If app must support IE (very rare in 2024+) → keep old default with
+      X-Download-Options included.
+      If app already customizes default_headers → merge carefully.
+
+  - config: active_record.raise_on_assign_to_attr_readonly
+    config_line: "Rails.application.config.active_record.raise_on_assign_to_attr_readonly = true"
+    new_default: true
+    old_default: false
+    risk: low
+    old_behavior: "Assignment to attr_readonly attributes is silently ignored (not persisted)"
+    new_behavior: "Raises ActiveRecord::ReadonlyAttributeError on assignment to readonly attrs"
+    lookup:
+      - search: "attr_readonly"
+        in: "app/models/**/*.rb"
+        reason: "Find models that use attr_readonly"
+      - search: "readonly!"
+        in: "app/models/**/*.rb"
+        reason: "Check for records marked as readonly"
+    decision: >
+      If no attr_readonly usage → zero impact, safe to use new default.
+      If attr_readonly is used → safe to use new default, but run tests.
+      Any raises indicate code that was assigning to readonly attributes
+      (which was silently failing before). This is almost always a bug.
+
+  - config: active_record.run_after_transaction_callbacks_in_order_defined
+    config_line: "Rails.application.config.active_record.run_after_transaction_callbacks_in_order_defined = true"
+    new_default: true
+    old_default: false
+    risk: medium
+    old_behavior: "after_commit callbacks run in REVERSE order of definition"
+    new_behavior: "after_commit callbacks run in order of definition (matches all other callbacks)"
+    lookup:
+      - search: "after_commit\\|after_create_commit\\|after_update_commit\\|after_destroy_commit\\|after_save_commit"
+        in: "app/models/**/*.rb"
+        reason: "Find models with multiple after_commit callbacks"
+    decision: >
+      If no models have multiple after_commit callbacks → safe, order irrelevant.
+      If models have multiple after_commit callbacks → check if any callback
+      depends on another having run first. The execution order is reversing,
+      so dependencies between callbacks could break. Review and test.
+
+  - config: active_record.run_commit_callbacks_on_first_saved_instances_in_transaction
+    config_line: "Rails.application.config.active_record.run_commit_callbacks_on_first_saved_instances_in_transaction = false"
+    new_default: false
+    old_default: true
+    risk: medium
+    old_behavior: >
+      When multiple instances of the same record are saved in a transaction,
+      after_commit runs on the FIRST saved instance
+    new_behavior: >
+      after_commit runs on the LAST saved instance (most likely to have
+      state matching what was committed to the database)
+    lookup:
+      - search: "after_commit"
+        in: "app/models/**/*.rb"
+        reason: "Find models with after_commit callbacks"
+      - search: "transaction do"
+        in: "app/**/*.rb, lib/**/*.rb"
+        reason: "Find explicit transaction blocks that might save the same record multiple times"
+    decision: >
+      If no after_commit callbacks → safe, no impact.
+      If after_commit callbacks exist but records are not saved multiple
+      times in a single transaction → safe.
+      If records ARE saved multiple times in transactions with after_commit
+      → check if callbacks depend on the first save's state. If so, keep
+      true. Otherwise, use new default (false) which is more correct.
+
+  - config: active_record.before_committed_on_all_records
+    config_line: "Rails.application.config.active_record.before_committed_on_all_records = true"
+    new_default: true
+    old_default: false
+    risk: low
+    old_behavior: "before_committed! only runs on the first copy of a record in a transaction"
+    new_behavior: "before_committed! runs on all enrolled copies of a record in a transaction"
+    lookup:
+      - search: "before_committed\\|before_commit"
+        in: "app/models/**/*.rb"
+        reason: "Find models with before_committed! callbacks"
+    decision: >
+      If no before_committed! callbacks → safe, no impact.
+      If before_committed! callbacks exist → safe to use new default in
+      most cases. The new behavior is more correct. Test to verify.
+
+  - config: active_record.commit_transaction_on_non_local_return
+    config_line: "Rails.application.config.active_record.commit_transaction_on_non_local_return = true"
+    new_default: true
+    old_default: false
+    risk: medium
+    old_behavior: "Transaction is rolled back when exited via return, break, or throw"
+    new_behavior: "Transaction is committed when exited via return, break, or throw"
+    lookup:
+      - search: "transaction do"
+        in: "app/**/*.rb, lib/**/*.rb"
+        reason: "Find transaction blocks"
+    decision: >
+      Search for transaction blocks that use early return, break, or throw.
+      If none found → safe to use new default.
+      If found → this is a significant behavior change. Code that relied on
+      return causing a rollback will now commit instead. Review each case.
+      The new behavior is arguably more intuitive but could break
+      intentional rollback-via-return patterns.
+
+  - config: active_record.generate_secure_token_on
+    config_line: "Rails.application.config.active_record.generate_secure_token_on = :initialize"
+    new_default: ":initialize"
+    old_default: ":create"
+    risk: low
+    old_behavior: "has_secure_token generates the token value on create (before_create callback)"
+    new_behavior: "has_secure_token generates the token value on initialize (available immediately)"
+    lookup:
+      - search: "has_secure_token"
+        in: "app/models/**/*.rb"
+        reason: "Find models using has_secure_token"
+    decision: >
+      If no has_secure_token usage → safe, no impact.
+      If has_secure_token is used → safe to use new default in most cases.
+      The token is now available immediately after .new instead of after
+      .create. This is generally better. Only concern: if code creates
+      many objects without saving and you're worried about token generation
+      overhead, but that's extremely unlikely.
+
+  - config: action_view.sanitizer_vendor
+    config_line: "Rails.application.config.action_view.sanitizer_vendor = Rails::HTML::Sanitizer.best_supported_vendor"
+    new_default: "Rails::HTML::Sanitizer.best_supported_vendor (HTML5 if available)"
+    old_default: "Rails::HTML4::Sanitizer"
+    risk: low
+    old_behavior: "Action View uses HTML4 sanitizer"
+    new_behavior: "Action View uses HTML5 sanitizer when available, falls back to HTML4"
+    lookup:
+      - search: "sanitize\\|strip_tags"
+        in: "app/views/**/*.erb, app/views/**/*.haml, app/helpers/**/*.rb"
+        reason: "Check if the app uses sanitize or strip_tags helpers"
+      - search: "rails-html-sanitizer"
+        in: "Gemfile, Gemfile.lock"
+        reason: "Check sanitizer gem version"
+    decision: >
+      Safe to use new default in most cases. The HTML5 sanitizer is more
+      standards-compliant. If sanitization behavior changes for specific
+      HTML patterns, it's likely the HTML5 parser is more correct. Test
+      any custom sanitization rules.
+
+  - config: action_text.sanitizer_vendor
+    config_line: "Rails.application.config.action_text.sanitizer_vendor = Rails::HTML::Sanitizer.best_supported_vendor"
+    new_default: "Rails::HTML::Sanitizer.best_supported_vendor (HTML5 if available)"
+    old_default: "Rails::HTML4::Sanitizer"
+    risk: low
+    old_behavior: "Action Text uses HTML4 sanitizer"
+    new_behavior: "Action Text uses HTML5 sanitizer when available, falls back to HTML4"
+    lookup:
+      - search: "has_rich_text\\|action_text"
+        in: "app/models/**/*.rb, Gemfile"
+        reason: "Check if Action Text is used"
+    decision: >
+      If Action Text is not used → safe, no impact.
+      If Action Text is used → safe to use new default. Same rationale
+      as action_view.sanitizer_vendor above.
+
+  - config: active_record.query_log_tags_format
+    config_line: "Rails.application.config.active_record.query_log_tags_format = :sqlcommenter"
+    new_default: ":sqlcommenter"
+    old_default: ":legacy"
+    risk: low
+    old_behavior: "Query log tags use legacy format"
+    new_behavior: "Query log tags use SQLCommenter format (OpenTelemetry standard)"
+    lookup:
+      - search: "query_log_tags"
+        in: "config/**/*.rb, config/initializers/**/*.rb"
+        reason: "Check if query log tags are configured"
+      - search: "query_log_tags_format"
+        in: "config/**/*.rb"
+        reason: "Check if format is already explicitly set"
+    decision: >
+      If query log tags are not enabled → safe, no impact.
+      If query log tags are enabled → safe to switch. The SQLCommenter
+      format is the standard and better supported by observability tools.
+      Check if any log parsing/monitoring tools depend on the legacy format.
+
+  - config: active_job.use_big_decimal_serializer
+    config_line: "Rails.application.config.active_job.use_big_decimal_serializer = true"
+    new_default: true
+    old_default: false
+    risk: low
+    old_behavior: "BigDecimal args serialized as simple strings (may lose precision)"
+    new_behavior: "BigDecimal args serialized with roundtrip guarantee"
+    lookup:
+      - search: "BigDecimal"
+        in: "app/jobs/**/*.rb"
+        reason: "Check if any jobs pass BigDecimal arguments"
+      - search: "perform_later.*BigDecimal\\|BigDecimal.*perform_later"
+        in: "app/**/*.rb"
+        reason: "Check if BigDecimal values are passed to jobs"
+    decision: >
+      If no BigDecimal arguments in jobs → safe, no impact.
+      If BigDecimal arguments exist → safe ONLY after all replicas are on
+      Rails 7.1. During rolling deploys, old replicas cannot deserialize
+      the new format. Enable after full deployment.
+
+tier_3_reference:
+  # ---- Higher risk configs — flagged for human review ----
+
+  - config: active_record.encryption.hash_digest_class
+    config_line: "Rails.application.config.active_record.encryption.hash_digest_class = OpenSSL::Digest::SHA256"
+    new_default: "OpenSSL::Digest::SHA256"
+    old_default: "OpenSSL::Digest::SHA1"
+    risk: high
+    note: >
+      Active Record Encryption digest class. There are 3 scenarios:
+
+      1. If key_generator_hash_digest_class is still SHA1 (pre-7.0 default):
+         Set this to OpenSSL::Digest::SHA1 to match.
+      2. If key_generator_hash_digest_class is already SHA256 (7.0 default):
+         Set this to OpenSSL::Digest::SHA256 to match.
+      3. If no data is encrypted with Active Record Encryption:
+         Skip this and set support_sha1_for_non_deterministic_encryption = false.
+
+      LOOKUP: Check config.active_support.key_generator_hash_digest_class
+      in config/application.rb and initializers. Also check if Active Record
+      Encryption is actually used (grep for encrypts/encrypted in models).
+
+  - config: active_record.encryption.support_sha1_for_non_deterministic_encryption
+    config_line: "Rails.application.config.active_record.encryption.support_sha1_for_non_deterministic_encryption = false"
+    new_default: false
+    old_default: true
+    risk: high
+    note: >
+      Only disable this (set to false) if you have NO existing data encrypted
+      with SHA1. If you have encrypted data from pre-7.0 with SHA1, keep
+      this true until all data has been re-encrypted with SHA256.
+
+      LOOKUP: Check if Active Record Encryption is used (grep for encrypts
+      in models). If not used, safe to set false.
+
+  - config: active_support.message_serializer
+    config_line: "Rails.application.config.active_support.message_serializer = :json_allow_marshal"
+    new_default: ":json_allow_marshal"
+    old_default: ":marshal"
+    risk: high
+    note: >
+      Changes the serializer for MessageEncryptor and MessageVerifier from
+      Marshal to JSON (with Marshal fallback for reading). This is a security
+      improvement but changes the message format.
+
+      ROLLING DEPLOY WARNING: During rolling deploys, old servers cannot read
+      messages serialized with the new format. Deploy first WITHOUT changing
+      this, then enable in a subsequent deploy after all servers are on 7.1.
+
+      The progression path is: :marshal → :json_allow_marshal (7.1) → :json (7.2).
+
+  - config: active_support.use_message_serializer_for_metadata
+    config_line: "Rails.application.config.active_support.use_message_serializer_for_metadata = true"
+    new_default: true
+    old_default: false
+    risk: medium
+    note: >
+      Performance optimization that changes message format. Messages
+      serialized with this enabled cannot be read by older Rails versions.
+
+      ROLLING DEPLOY WARNING: Same as message_serializer — deploy without
+      this first, enable in subsequent deploy after all servers are on 7.1.
+
+  - config: active_record.default_column_serializer
+    config_line: "Rails.application.config.active_record.default_column_serializer = nil"
+    new_default: "nil"
+    old_default: "YAML"
+    risk: high
+    note: >
+      Disables automatic YAML serialization for serialize declarations.
+      When set to nil, every serialize call MUST specify its coder explicitly.
+
+      LOOKUP: Grep for `serialize` in app/models. If any serialize calls
+      do not specify a coder (e.g., `serialize :data` without `, JSON` or
+      `, YAML`), they will break.
+
+      If found without explicit coders → keep YAML as default, then
+      incrementally add explicit coders to each serialize call, then
+      switch to nil.
+
+  - config: active_record.marshalling_format_version
+    config_line: "Rails.application.config.active_record.marshalling_format_version = 7.1"
+    new_default: 7.1
+    old_default: 7.0
+    risk: medium
+    note: >
+      More compact serialization format for caching Active Record models.
+
+      ROLLING DEPLOY WARNING: Old servers cannot read the new format from
+      cache. Deploy without this first, enable after all servers are on 7.1.
+
+  # These MUST go in config/application.rb, not the initializer file
+  application_rb_only:
+    - config: active_support.cache_format_version
+      config_line: "config.active_support.cache_format_version = 7.1"
+      new_default: 7.1
+      old_default: 7.0
+      risk: high
+      note: >
+        Changes cache entry format. Not backwards-compatible with Rails 7.0.
+        Only set after fully deployed to 7.1 with no rollback plans.
+        Must be set in config/application.rb.
+
+    - config: add_autoload_paths_to_load_path
+      config_line: "config.add_autoload_paths_to_load_path = false"
+      new_default: false
+      old_default: true
+      risk: medium
+      note: >
+        Stops adding autoloaded paths to $LOAD_PATH. This means explicit
+        `require` of autoloaded files will stop working (you should use
+        autoloading instead).
+        Must be set in config/application.rb.
+
+        LOOKUP: Grep for `require` calls that load files from app/ or lib/
+        directories. If found, convert them to rely on autoloading instead.

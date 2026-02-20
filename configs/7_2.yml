@@ -1,0 +1,138 @@
+# Rails 7.2 Framework Defaults Config Reference
+#
+# Configs are organized into tiers:
+#   tier_1: Safe to flip — trivially low risk
+#   tier_2: Low risk — need a quick codebase grep to confirm
+#   tier_3: Medium/high risk — need careful analysis, flagged for human review
+#
+# Processing order: tier_1 first, then tier_2, then tier_3.
+#
+# NOTE: Rails 7.2 is a relatively small release for load_defaults — only 5 configs.
+
+version: "7.2"
+
+tier_1:
+  # ---- Safe / trivially low risk ----
+
+  - config: active_record.validate_migration_timestamps
+    config_line: "Rails.application.config.active_record.validate_migration_timestamps = true"
+    new_default: true
+    old_default: false
+    risk: very_low
+    old_behavior: "Migration timestamps are not validated (forward-dated migrations allowed)"
+    new_behavior: "Raises error if a migration timestamp is more than a day in the future"
+    lookup: []
+    decision: >
+      Always safe to use new default (true). This only affects migration
+      generation, not runtime behavior. If existing migrations have
+      future-dated timestamps, they won't be affected — only new migrations
+      are validated at generation time. If for some reason you have a workflow
+      that intentionally forward-dates migrations, keep false.
+
+  - config: active_record.postgresql_adapter_decode_dates
+    config_line: "Rails.application.config.active_record.postgresql_adapter_decode_dates = true"
+    new_default: true
+    old_default: false
+    risk: very_low
+    old_behavior: "Manual PostgreSQL queries return date columns as Strings"
+    new_behavior: "Manual PostgreSQL queries return date columns as Date objects"
+    lookup:
+      - search: "select_value\\|select_rows\\|select_all\\|execute.*date"
+        in: "app/**/*.rb, lib/**/*.rb"
+        reason: "Check for manual SQL queries that select date columns"
+      - search: "postgresql\\|postgres"
+        in: "config/database.yml"
+        reason: "Check if the app uses PostgreSQL"
+    decision: >
+      If app does not use PostgreSQL → zero impact, safe to use new default.
+      If app uses PostgreSQL but has no manual SQL queries with date columns
+      → safe, no impact (Active Record model queries already return Date).
+      If manual SQL queries exist that select dates and code expects String
+      return values (e.g., parsing the string) → keep false, update code
+      to handle Date objects, then switch to true.
+      Most apps → safe to use new default.
+
+  - config: yjit
+    config_line: "Rails.application.config.yjit = true"
+    new_default: true
+    old_default: false
+    risk: very_low
+    old_behavior: "YJIT is not enabled by Rails"
+    new_behavior: "YJIT is enabled automatically (Ruby 3.3+)"
+    lookup:
+      - search: "yjit"
+        in: "config/**/*.rb, config/initializers/**/*.rb"
+        reason: "Check if YJIT is already configured"
+    decision: >
+      If Ruby version is < 3.3 → no impact, YJIT is not available.
+      If Ruby version is >= 3.3 → safe to enable. YJIT provides significant
+      performance improvements with minimal memory overhead.
+      If deploying to a memory-constrained environment (very small containers)
+      → consider keeping false, as YJIT increases memory usage.
+      Almost always safe and beneficial to enable.
+
+tier_2:
+  # ---- Low risk but needs codebase check ----
+
+  - config: active_job.enqueue_after_transaction_commit
+    config_line: "Rails.application.config.active_job.enqueue_after_transaction_commit = :default"
+    new_default: ":default"
+    old_default: ":never"
+    risk: medium
+    old_behavior: "Jobs are enqueued immediately, even inside an open transaction"
+    new_behavior: >
+      Job queuing is deferred until the current Active Record transaction
+      commits. The queue adapter defines the exact behavior. This prevents
+      jobs from running before the data they depend on is committed.
+    lookup:
+      - search: "perform_later"
+        in: "app/**/*.rb, lib/**/*.rb"
+        reason: "Find all job enqueue calls"
+      - search: "perform_later"
+        in: "app/models/**/*.rb"
+        reason: "Check for jobs enqueued inside model callbacks (likely inside transactions)"
+      - search: "transaction do"
+        in: "app/**/*.rb, lib/**/*.rb"
+        reason: "Find explicit transaction blocks that enqueue jobs"
+      - search: "enqueue_after_transaction_commit"
+        in: "app/jobs/**/*.rb"
+        reason: "Check if any jobs already set this per-job"
+    decision: >
+      If no jobs are enqueued inside transactions → safe, behavior unchanged.
+      If jobs are enqueued inside transactions → the new default is almost
+      always BETTER (prevents race conditions where a job runs before data
+      is committed). This is the correct behavior for most apps.
+      If the queue backend uses the same database as Active Record (e.g.,
+      solid_queue, good_job, delayed_job with AR backend) → the backend
+      may disable this feature automatically since it's unnecessary.
+      If code intentionally enqueues jobs before commit (e.g., to send a
+      "processing" notification before the transaction completes) → keep
+      :never for those specific jobs using per-job configuration.
+      Most apps → safe and beneficial to use new default.
+
+  - config: active_storage.web_image_content_types
+    config_line: "Rails.application.config.active_storage.web_image_content_types = %w[image/png image/jpeg image/gif image/webp]"
+    new_default: "%w[image/png image/jpeg image/gif image/webp]"
+    old_default: "%w[image/png image/jpeg image/gif]"
+    risk: low
+    old_behavior: "WebP images are converted to PNG when processed by Active Storage"
+    new_behavior: "WebP images are kept as WebP (no conversion to PNG)"
+    lookup:
+      - search: "has_one_attached\\|has_many_attached"
+        in: "app/models/**/*.rb"
+        reason: "Check if Active Storage is used"
+      - search: "webp"
+        in: "app/**/*.rb, config/**/*.rb"
+        reason: "Check if WebP is already handled"
+      - search: "variant\\|representation"
+        in: "app/**/*.rb"
+        reason: "Check if image variants/representations are used"
+    decision: >
+      If Active Storage is not used → zero impact, safe to use new default.
+      If Active Storage is used but no image processing → safe.
+      If image variants are generated → safe for modern browsers (WebP has
+      broad support). Only concern is if images are sent via email to
+      older email clients that don't support WebP.
+      Requires imagemagick/libvips built with WebP support in production.
+      If unsure about WebP support in your image processing library → check
+      before enabling.

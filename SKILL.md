@@ -32,7 +32,6 @@ there are framework default configs that need to be adopted. This skill:
 ## Step 1: Detect Current State
 
 Read `config/application.rb` and look for:
-
 ```ruby
 config.load_defaults X.Y
 ```
@@ -41,7 +40,6 @@ Also check if a `config/initializers/new_framework_defaults_*.rb` file already
 exists (the user may be mid-upgrade).
 
 Report to the user:
-
 - Current `load_defaults` version
 - Current Rails version (from Gemfile.lock)
 - Which version transitions are needed (e.g., 6.1 → 7.0 → 7.1 → 7.2)
@@ -80,7 +78,6 @@ For each config:
 ### 4a. Analyze the Codebase
 
 Run the lookup patterns defined in the config reference:
-
 - Use `grep -r` or `find` to search for the patterns listed
 - Check the specific files/directories indicated
 - Apply the decision tree to determine the recommended value
@@ -88,7 +85,6 @@ Run the lookup patterns defined in the config reference:
 ### 4b. Present Recommendation
 
 Tell the user:
-
 - What the config does (old behavior → new behavior)
 - What you found in their codebase
 - Your recommended value and why
@@ -97,32 +93,48 @@ Tell the user:
 ### 4c. Apply the Change
 
 Once the user agrees:
-
 - Uncomment the config line in the initializer file
 - Set the value (either the new default or the override value)
 
 ### 4d. Wait for User
 
 Stop and wait. The user will:
-
 - Commit and push the change
 - Run CI or manually test
 - Come back to confirm success or report failure
 
 If the change broke something:
-
 - Re-comment the config line or set it to the old value
 - Note it as needing investigation
 - Move to the next config
 
-### 4e. Track Progress
+### 4e. Handle application_rb_only Configs
+
+Some configs are marked `application_rb_only` in the version reference YAML.
+These cannot go in the initializer file and must be tested directly in
+`config/application.rb`.
+
+During the iterative walkthrough, when you reach these configs:
+- Add them explicitly in `config/application.rb` (after the existing
+  `load_defaults` line) so they can be tested in isolation
+- Mark them with a comment so they're easy to find during consolidation:
+
+```ruby
+config.load_defaults 6.1
+
+# TESTING load_defaults 7.0 — remove during consolidation if using new default
+config.active_support.cache_format_version = 7.0
+```
+
+- Wait for the user to test/commit as with any other config
+
+### 4f. Track Progress
 
 Keep track of which configs have been processed by reading the initializer
 file. Commented lines = pending. Uncommented lines = done.
 
-Configs that are explicitly noted in the file with comments like
-`# NOTE: must be configured in config/application.rb` should be handled
-separately during consolidation.
+For `application_rb_only` configs, track them by looking for the
+`# TESTING load_defaults` comments in `config/application.rb`.
 
 ## Step 5: Consolidation
 
@@ -145,12 +157,29 @@ config.load_defaults 7.0
 
 # Override: kept old behavior because CSS targets input[type=submit] from button_to
 config.action_view.button_to_generates_button_tag = false
+
+# Override: kept old behavior because app uses namespaced UUIDs as stored identifiers
+config.active_support.use_rfc4122_namespaced_uuids = false
 ```
 
-4. Also handle any configs that were flagged as "must go in config/application.rb"
-   (like `cache_format_version` and `disable_to_s_conversion`) — these were
-   never in the initializer file, so set them here if adopting the new default,
-   or omit them to keep old behavior.
+4. **Remove `application_rb_only` configs that use the NEW default.** During
+   testing (Step 4e), these were added explicitly in `config/application.rb`
+   with `# TESTING load_defaults` comments. Now that `load_defaults` is set
+   to the new version, the new defaults are already implied — keeping them
+   is redundant. Remove them.
+
+   Only keep `application_rb_only` configs if you chose the OLD value:
+
+```ruby
+config.load_defaults 7.0
+
+# load_defaults 7.0 already sets cache_format_version = 7.0,
+# so do NOT explicitly set it here. Just remove the testing line.
+
+# Override: kept old behavior because [reason]
+config.active_support.disable_to_s_conversion = false
+```
+
 5. Remind the user to commit and do a final round of testing.
 
 ## Step 6: Next Version

@@ -57,6 +57,7 @@ Read the appropriate config reference file for the target version:
 - **7.1**: `configs/7_1.yml`
 - **7.2**: `configs/7_2.yml`
 - **8.0**: `configs/8_0.yml`
+- **8.1**: `configs/8_1.yml`
 
 Each config file contains entries organized into tiers with lookup patterns
 and decision trees for each config.
@@ -75,6 +76,7 @@ the `templates/` directory into the app's `config/initializers/`:
 - **7.1**: Copy `templates/new_framework_defaults_7_1.rb` → `config/initializers/new_framework_defaults_7_1.rb`
 - **7.2**: Copy `templates/new_framework_defaults_7_2.rb` → `config/initializers/new_framework_defaults_7_2.rb`
 - **8.0**: Copy `templates/new_framework_defaults_8_0.rb` → `config/initializers/new_framework_defaults_8_0.rb`
+- **8.1**: Copy `templates/new_framework_defaults_8_1.rb` → `config/initializers/new_framework_defaults_8_1.rb`
 
 These templates contain the exact canonical Rails initializer with all configs
 commented out, matching what `rails app:update` would generate. Always use

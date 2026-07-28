@@ -1,0 +1,112 @@
+# Rails 8.0 Framework Defaults Config Reference
+#
+# Configs are organized into tiers:
+#   tier_1: Safe to flip — trivially low risk
+#   tier_2: Low risk — need a quick codebase grep to confirm
+#   tier_3: Medium/high risk — need careful analysis, flagged for human review
+#
+# Processing order: tier_1 first, then tier_2, then tier_3.
+#
+# NOTE: Rails 8.0 is a small release for load_defaults — only 3 configs.
+
+version: "8.0"
+
+tier_1:
+  # ---- Safe / trivially low risk ----
+
+  - config: regexp_timeout
+    config_line: "Regexp.timeout = 1"
+    new_default: 1
+    old_default: "nil (no timeout)"
+    risk: low
+    old_behavior: "Regular expression matching can run indefinitely (ReDoS risk)"
+    new_behavior: "Any single Regexp#match call that runs longer than 1 second raises Regexp::TimeoutError"
+    lookup:
+      - search: "Regexp.timeout"
+        in: "config/**/*.rb, config/initializers/**/*.rb"
+        reason: "Check if the app already sets a custom Regexp.timeout"
+      - search: "\\.match\\|=~\\|scan(\\|gsub(\\|split("
+        in: "app/**/*.rb, lib/**/*.rb"
+        reason: "Look for regex operations against large or user-supplied strings, which are the ones most likely to exceed 1s"
+    decision: >
+      This is a global Ruby VM setting (not per-request), so it applies to
+      the whole process, including background jobs. Almost always safe and
+      recommended — it's a security hardening default that protects against
+      ReDoS from untrusted input (params, uploaded file contents, etc.).
+      Only concern: if the app intentionally runs very large/slow regex
+      operations against trusted, large payloads (e.g., parsing big log
+      files or documents) that legitimately take longer than 1 second, those
+      calls will start raising Regexp::TimeoutError. If found, either
+      refactor those specific matches to avoid catastrophic backtracking, or
+      wrap them with `Regexp.timeout = nil` scoped to that operation via
+      `Regexp.new(pattern, timeout: nil)` rather than disabling the global
+      default.
+
+tier_2:
+  # ---- Low risk but needs codebase check ----
+
+  - config: action_dispatch.strict_freshness
+    config_line: "Rails.application.config.action_dispatch.strict_freshness = true"
+    new_default: true
+    old_default: false
+    risk: low
+    old_behavior: >
+      When a request includes both `If-Modified-Since` and `If-None-Match`
+      headers, both conditions must be satisfied for the response to be
+      considered fresh (304 Not Modified).
+    new_behavior: >
+      Only `If-None-Match` (ETag) is considered when both headers are
+      present, per RFC 7232 Section 6. `If-Modified-Since` is ignored in
+      that case.
+    lookup:
+      - search: "fresh_when\\|stale?\\|etag\\|last_modified"
+        in: "app/controllers/**/*.rb"
+        reason: "Find controllers using conditional GET / HTTP caching"
+      - search: "If-Modified-Since\\|If-None-Match"
+        in: "app/**/*.rb, spec/**/*.rb, test/**/*.rb"
+        reason: "Check for tests or code that explicitly depend on both conditional headers together"
+    decision: >
+      If the app doesn't use `fresh_when`/`stale?`/manual ETag or
+      Last-Modified headers → zero impact, safe to use new default.
+      If conditional GET is used → in virtually all real clients and CDNs,
+      ETag is already treated as authoritative when present, so this just
+      makes Rails match standard HTTP semantics. Safe to use new default.
+      Only keep `false` if you have tests or clients that specifically rely
+      on both headers being checked together (very unusual).
+
+  - config: active_support.to_time_preserves_timezone
+    config_line: "Rails.application.config.active_support.to_time_preserves_timezone = :zone"
+    new_default: ":zone"
+    old_default: ":offset (previously `true`)"
+    risk: medium
+    old_behavior: >
+      `to_time` (called on `Time`, `DateTime`, or `ActiveSupport::TimeWithZone`)
+      returns a `Time` object with the receiver's UTC offset, but its
+      `Time.zone` name/reference is not preserved — only the numeric offset is.
+    new_behavior: >
+      `to_time` returns a `Time` object that preserves the actual timezone
+      of the receiver (e.g., "America/New_York"), not just its UTC offset.
+      This matters around DST transitions and when the offset alone is
+      ambiguous relative to the zone.
+    lookup:
+      - search: "\\.to_time"
+        in: "app/**/*.rb, lib/**/*.rb"
+        reason: "Find all calls converting Time/DateTime/TimeWithZone to Time via to_time"
+      - search: "\\.to_time\\..*zone\\|\\.to_time\\.utc_offset"
+        in: "app/**/*.rb, lib/**/*.rb"
+        reason: "Check if code inspects the zone/offset of the resulting Time object, which is where behavior differs"
+      - search: "to_time"
+        in: "spec/**/*.rb, test/**/*.rb"
+        reason: "Check for tests asserting on the exact offset/zone of a to_time result"
+    decision: >
+      If `to_time` is not called anywhere → zero impact, safe to use new default.
+      If `to_time` is called but the result is only used for comparison,
+      arithmetic, or formatting in UTC/absolute terms → safe, no observable
+      difference in most cases.
+      If code inspects the resulting Time's UTC offset or zone name directly
+      (e.g., serializes it, logs it, or branches on it) → review carefully,
+      since the returned value's zone metadata changes. Run tests around
+      DST transition dates specifically, since that's where :offset and
+      :zone diverge most visibly.
+      If unsure or tests are flaky around this → keep the old value
+      (`:offset`) until the affected call sites are reviewed one by one.

@@ -77,12 +77,15 @@ tier_2:
   - config: active_support.to_time_preserves_timezone
     config_line: "Rails.application.config.active_support.to_time_preserves_timezone = :zone"
     new_default: ":zone"
-    old_default: ":offset (previously `true`)"
+    old_default: ":offset"
     risk: medium
     old_behavior: >
       `to_time` (called on `Time`, `DateTime`, or `ActiveSupport::TimeWithZone`)
       returns a `Time` object with the receiver's UTC offset, but its
       `Time.zone` name/reference is not preserved — only the numeric offset is.
+      Rails versions before 8.0 expressed this same behavior as `true`; the
+      `:offset`/`:zone` symbols were introduced in 8.0, and `:offset` is the
+      value to write when keeping the old behavior.
     new_behavior: >
       `to_time` returns a `Time` object that preserves the actual timezone
       of the receiver (e.g., "America/New_York"), not just its UTC offset.

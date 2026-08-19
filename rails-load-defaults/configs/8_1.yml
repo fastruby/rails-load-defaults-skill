@@ -7,8 +7,12 @@
 #
 # Processing order: tier_1 first, then tier_2, then tier_3.
 #
-# NOTE: All 8.1 configs use `Rails.configuration.*` (not `Rails.application.config.*`)
+# NOTE: The 8.1 configs use `Rails.configuration.*` (not `Rails.application.config.*`)
 # in the generated initializer — that's the exact syntax Rails 8.1 ships, not a typo.
+#
+# NOTE: `yjit` is listed here but is NOT in the Rails 8.1 initializer template.
+# `load_defaults 8.1` still changes it, so it needs its own test cycle; the entry
+# is marked with a `note` explaining how to handle it.
 
 version: "8.1"
 
@@ -39,7 +43,7 @@ tier_1:
   - config: action_view.render_tracker
     config_line: "Rails.configuration.action_view.render_tracker = :ruby"
     new_default: ":ruby"
-    old_default: "regex-based tracker"
+    old_default: ":regex"
     risk: low
     old_behavior: >
       Action View detects `render` calls inside ERB templates (to compute
@@ -88,6 +92,42 @@ tier_1:
       for these characters — rare. Note this only affects the two
       separator characters, not HTML-entity escaping (`<`, `>`, `&`), which
       is controlled separately by `action_controller.escape_json_responses`.
+
+  - config: yjit
+    config_line: "Rails.configuration.yjit = !Rails.env.local?"
+    new_default: "!Rails.env.local? (true everywhere except development and test)"
+    old_default: true
+    risk: very_low
+    note: >
+      NOT PRESENT in the Rails 8.1 `new_framework_defaults_8_1.rb` template —
+      Rails does not expose this one for incremental opt-in, but
+      `load_defaults 8.1` does change it (see the `when "8.1"` block in
+      railties/lib/rails/application/configuration.rb). Add the commented
+      config line to the initializer manually so it gets its own test cycle,
+      the same as any other config in this file.
+    old_behavior: >
+      `load_defaults 7.2` set `config.yjit = true`, enabling YJIT in every
+      environment including development and test.
+    new_behavior: >
+      YJIT is enabled everywhere except local environments. Production,
+      staging, and any other non-local environment are unchanged; development
+      and test no longer enable YJIT.
+    lookup:
+      - search: "yjit"
+        in: "config/**/*.rb, config/initializers/**/*.rb, config/environments/**/*.rb"
+        reason: "Check if the app already sets config.yjit explicitly, which would override this"
+      - search: "RubyVM::YJIT"
+        in: "config/**/*.rb, lib/**/*.rb"
+        reason: "Check for manual YJIT enabling or stats collection that assumes YJIT is on in all environments"
+    decision: >
+      Safe to use new default in essentially all apps. Rails changed this
+      because dev and test constantly reload code and redefine methods
+      (mocking, `reload!`), which defeats YJIT's warmup — so it costs memory
+      without buying speed there. Production behavior does not change.
+      If no explicit `config.yjit` is set anywhere → safe, adopt the new default.
+      Only keep `true` if you specifically benchmark or profile YJIT behavior
+      in development, or run a local environment that needs to mirror
+      production's JIT behavior exactly.
 
 tier_2:
   # ---- Low risk but needs codebase check ----

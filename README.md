@@ -66,6 +66,8 @@ claude "The app is on Rails 7.2 but load_defaults is at 6.1, let's upgrade"
 | → 7.0      | `rails-load-defaults/configs/7_0.yml` | `rails-load-defaults/templates/new_framework_defaults_7_0.rb` |
 | → 7.1      | `rails-load-defaults/configs/7_1.yml` | `rails-load-defaults/templates/new_framework_defaults_7_1.rb` |
 | → 7.2      | `rails-load-defaults/configs/7_2.yml` | `rails-load-defaults/templates/new_framework_defaults_7_2.rb` |
+| → 8.0      | `rails-load-defaults/configs/8_0.yml` | `rails-load-defaults/templates/new_framework_defaults_8_0.rb` |
+| → 8.1      | `rails-load-defaults/configs/8_1.yml` | `rails-load-defaults/templates/new_framework_defaults_8_1.rb` |
 
 ## How It Works
 
@@ -139,7 +141,9 @@ rails-load-defaults-skill/
     │   ├── 6_1.yml
     │   ├── 7_0.yml
     │   ├── 7_1.yml
-    │   └── 7_2.yml
+    │   ├── 7_2.yml
+    │   ├── 8_0.yml
+    │   └── 8_1.yml
     └── templates/
         ├── new_framework_defaults_5_0.rb   # Rails initializer templates
         ├── new_framework_defaults_5_1.rb
@@ -149,6 +153,8 @@ rails-load-defaults-skill/
         ├── new_framework_defaults_7_0.rb
         ├── new_framework_defaults_7_1.rb
         ├── new_framework_defaults_7_2.rb
+        ├── new_framework_defaults_8_0.rb
+        ├── new_framework_defaults_8_1.rb
         └── cookie_rotator.rb              # SHA1→SHA256 cookie rotation
 ```
 

@@ -1,6 +1,6 @@
 {
   "name": "rails-load-defaults",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Align Rails load_defaults across versions with safe, incremental config changes based on FastRuby.io methodology",
   "skills": "./rails-load-defaults/",
   "author": {
